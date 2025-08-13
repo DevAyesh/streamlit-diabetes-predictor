@@ -54,6 +54,124 @@ def load_metrics():
     return None
 
 
+def band_from_prob(probability: float) -> str:
+    p = float(probability)
+    if p < 0.20:
+        return "Low"
+    if p < 0.50:
+        return "Moderate"
+    if p < 0.80:
+        return "High"
+    return "Very High"
+
+
+def classify_diabetes(
+    inputs: dict,
+    model_prob: float,
+    threshold: float = 0.5,
+    symptomatic: bool = False,
+):
+    """
+    Applies ADA-style clinical rules first; if none met, falls back to ML.
+
+    inputs expected keys (optional where noted):
+      - measurement_type: "fasting" | "post_meal" | "random" | "ogtt_2h"
+      - glucose: float (mg/dL)
+      - ogtt_2h: Optional[float] (mg/dL)
+      - hba1c: Optional[float] (percent)
+    """
+    measurement_type = str(inputs.get("measurement_type") or "").strip().lower()
+    glucose = inputs.get("glucose")
+    ogtt_2h = inputs.get("ogtt_2h")
+    hba1c = inputs.get("hba1c")
+
+    final_category = None  # "Diabetes" | "Prediabetes" | "Normal"
+    decision_source = "ML only"
+    confirmatory_flag = False
+
+    # 1) Random glucose ≥ 200 mg/dL + symptoms → Diabetes (single test sufficient)
+    if measurement_type == "random" and glucose is not None:
+        try:
+            if float(glucose) >= 200.0 and bool(symptomatic):
+                final_category = "Diabetes"
+                decision_source = "Clinical override"
+        except Exception:
+            pass
+
+    # 2) HbA1c thresholds
+    if final_category is None and hba1c is not None:
+        try:
+            a1c = float(hba1c)
+            if a1c >= 6.5:
+                final_category = "Diabetes"
+                decision_source = "Clinical override"
+                confirmatory_flag = True  # confirm if asymptomatic
+            elif 5.7 <= a1c <= 6.4:
+                final_category = "Prediabetes"
+                decision_source = "Rule + ML"
+            elif a1c < 5.7:
+                final_category = "Normal"
+                decision_source = "Clinical override"
+        except Exception:
+            pass
+
+    # 3) OGTT 2h thresholds
+    if final_category is None and ogtt_2h is not None:
+        try:
+            og = float(ogtt_2h)
+            if og >= 200.0:
+                final_category = "Diabetes"
+                decision_source = "Clinical override"
+            elif 140.0 <= og <= 199.0:
+                final_category = "Prediabetes"
+                decision_source = "Rule + ML"
+            elif og < 140.0:
+                final_category = "Normal"
+                decision_source = "Clinical override"
+        except Exception:
+            pass
+
+    # 4) FPG thresholds (apply when measurement is fasting)
+    if final_category is None and measurement_type == "fasting" and glucose is not None:
+        try:
+            fpg = float(glucose)
+            if fpg >= 126.0:
+                final_category = "Diabetes"
+                decision_source = "Clinical override"
+                confirmatory_flag = True  # confirm if asymptomatic
+            elif 100.0 <= fpg <= 125.0:
+                final_category = "Prediabetes"
+                decision_source = "Rule + ML"
+            elif fpg < 100.0:
+                final_category = "Normal"
+                decision_source = "Clinical override"
+        except Exception:
+            pass
+
+    # Fall back to ML if no clinical diagnosis reached
+    prob = float(model_prob)
+    if final_category is None:
+        final_category = "Diabetes" if prob >= float(threshold) else "Normal"
+        decision_source = "ML only"
+
+    # Risk band and next steps
+    risk_band = band_from_prob(prob)
+    if final_category == "Diabetes":
+        next_step = "Discuss confirmatory testing or management with clinician"
+    elif final_category == "Prediabetes":
+        next_step = "Lifestyle changes + re-test in 3–6 months"
+    else:
+        next_step = "Maintain healthy lifestyle; consider periodic screening"
+
+    return {
+        "clinical_category": final_category,
+        "decision_source": decision_source,
+        "model_probability": prob,
+        "risk_band": risk_band,
+        "next_step": next_step,
+        "confirmatory_needed": bool(confirmatory_flag),
+    }
+
 def sidebar_navigation():
     st.sidebar.title("Navigation")
     return st.sidebar.radio(
@@ -70,7 +188,71 @@ def sidebar_navigation():
 
 def page_overview():
     st.title("Diabetes ML App")
-    st.write("A complete ML pipeline with EDA, model training, prediction, and deployment readiness.")
+    st.subheader("Predict diabetes risk with an end-to-end ML pipeline")
+    st.write(
+        "Explore the dataset, visualize patterns, run predictions, and review model performance — all in one place."
+    )
+
+    # Quick snapshot metrics
+    df = load_data()
+    mts = load_metrics()
+    num_rows = int(df.shape[0]) if df is not None else None
+    num_features = int(df.shape[1]) if df is not None else None
+    positive_rate = float(df["Outcome"].mean()) if df is not None and "Outcome" in df.columns else None
+    best_model = mts.get("best_model") if isinstance(mts, dict) else None
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rows", f"{num_rows:,}" if num_rows is not None else "—")
+    c2.metric("Columns", f"{num_features}" if num_features is not None else "—")
+    c3.metric("Positive rate", f"{positive_rate:.1%}" if positive_rate is not None else "—")
+    c4.metric("Best model", best_model if best_model else "—")
+
+    st.markdown("---")
+
+    # How to use
+    st.markdown(
+        """
+        #### Get started
+        - Go to **Data Exploration** to inspect the dataset and filter by ranges.
+        - Visit **Visualizations** for distributions and relationships.
+        - Use **Model Prediction** to input patient features and get risk probability.
+        - Check **Model Performance** for metrics, confusion matrix, ROC and PR curves.
+        """
+    )
+
+    # Mini visual teaser (optional)
+    if df is not None:
+        try:
+            fig = px.histogram(
+                df,
+                x="Glucose",
+                color="Outcome",
+                barmode="overlay",
+                nbins=35,
+                opacity=0.6,
+                title="Glucose distribution by outcome (teaser)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            pass
+
+    # Feature definitions
+    with st.expander("Feature definitions"):
+        st.markdown(
+            """
+            - **Pregnancies**: Number of times pregnant
+            - **Glucose**: Plasma glucose concentration (mg/dL)
+            - **BloodPressure**: Diastolic blood pressure (mm Hg)
+            - **SkinThickness**: Triceps skinfold thickness (mm)
+            - **Insulin**: 2-Hour serum insulin (mu U/ml)
+            - **BMI**: Body mass index (kg/m²)
+            - **DiabetesPedigreeFunction**: Heredity-based diabetes likelihood
+            - **Age**: Age in years
+            - **Outcome**: Diabetes status (0 = No, 1 = Yes)
+            - **measurement_type** (optional): e.g., `fasting`, `post_meal`
+            """
+        )
+
     st.info("Dataset: Pima Indians Diabetes (binary classification)")
 
 
@@ -137,17 +319,38 @@ def page_model_prediction(pipeline):
 
     with st.form("prediction_form"):
         c1, c2, c3, c4 = st.columns(4)
-        pregnancies = c1.number_input("Pregnancies", 0, 20, 1)
-        glucose = c2.number_input("Fasting Plasma Glucose (mg/dL)", 0.0, 300.0, 120.0)
-        blood_pressure = c3.number_input("BloodPressure", 0.0, 200.0, 70.0)
-        skin_thickness = c4.number_input("SkinThickness", 0.0, 100.0, 20.0)
+        pregnancies = c1.number_input("Pregnancies", 0, 20, 1, help="Number of times pregnant")
+        glucose = c2.number_input(
+            "Plasma Glucose (mg/dL)", 0.0, 300.0, 120.0, help="Measured plasma glucose in mg/dL"
+        )
+        blood_pressure = c3.number_input(
+            "BloodPressure", 0.0, 200.0, 70.0, help="Diastolic blood pressure (mm Hg)"
+        )
+        skin_thickness = c4.number_input(
+            "SkinThickness", 0.0, 100.0, 20.0, help="Triceps skinfold thickness (mm)"
+        )
 
-        insulin = c1.number_input("Insulin", 0.0, 900.0, 80.0)
-        bmi = c2.number_input("BMI", 0.0, 70.0, 28.0)
-        dpf = c3.number_input("DiabetesPedigreeFunction", 0.0, 3.0, 0.5)
-        age = c4.number_input("Age", 10, 100, 33)
+        insulin = c1.number_input("Insulin", 0.0, 900.0, 80.0, help="2-hour serum insulin (mu U/ml)")
+        bmi = c2.number_input("BMI", 0.0, 70.0, 28.0, help="Body mass index (kg/m²)")
+        dpf = c3.number_input(
+            "DiabetesPedigreeFunction", 0.0, 3.0, 0.5, help="Genetic/heredity-based risk factor"
+        )
+        age = c4.number_input("Age", 10, 100, 33, help="Age in years")
 
-        mtype = c1.selectbox("Measurement Type", options=["fasting", "post_meal"], index=0)
+        mtype = c1.selectbox(
+            "Measurement Type",
+            options=["fasting", "post_meal", "random", "ogtt_2h"],
+            index=0,
+            help="Context of glucose reading",
+        )
+        threshold = c2.slider(
+            "Decision threshold", 0.0, 1.0, 0.50, 0.01, help="Classify positive if probability ≥ threshold"
+        )
+        symptomatic = c3.checkbox(
+            "Symptoms present (polyuria, polydipsia, weight loss)?",
+            value=False,
+            help="Used only with random glucose for clinical diagnostic rule",
+        )
 
         submitted = st.form_submit_button("Predict")
 
@@ -169,9 +372,78 @@ def page_model_prediction(pipeline):
         )
         try:
             prob = float(pipeline.predict_proba(df)[:, 1][0])
-            st.metric("Probability of Diabetes", f"{prob:.2%}")
-            st.progress(min(1.0, max(0.0, prob)))
-            st.write("Predicted:", "Diabetic" if prob >= 0.5 else "Non-diabetic")
+            pred_positive = prob >= float(threshold)
+
+            # Top-line metrics
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Probability", f"{prob:.2%}")
+            m2.metric("Threshold", f"{threshold:.2f}")
+            m3.metric("Predicted", "Diabetic" if pred_positive else "Non-diabetic")
+
+            # Gauge visualization
+            import plotly.graph_objects as go
+
+            if prob < 0.33:
+                gauge_color = "#2ecc71"  # green
+            elif prob < 0.66:
+                gauge_color = "#f1c40f"  # yellow
+            else:
+                gauge_color = "#e74c3c"  # red
+
+            gauge = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=prob * 100.0,
+                    number={"suffix": "%"},
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": gauge_color},
+                        "steps": [
+                            {"range": [0, 33], "color": "#ecf9f1"},
+                            {"range": [33, 66], "color": "#fff9e6"},
+                            {"range": [66, 100], "color": "#fdecea"},
+                        ],
+                        "threshold": {
+                            "line": {"color": "#34495e", "width": 3},
+                            "thickness": 0.75,
+                            "value": float(threshold) * 100.0,
+                        },
+                    },
+                    title={"text": "Risk meter"},
+                )
+            )
+            st.plotly_chart(gauge, use_container_width=True)
+
+            # Unified clinical + ML decision
+            clinical_inputs = {
+                "measurement_type": mtype,
+                "glucose": glucose,
+                # Optional fields for extension; inputs not collected by default
+                "ogtt_2h": None if mtype != "ogtt_2h" else glucose,
+                "hba1c": None,
+            }
+            decision = classify_diabetes(
+                inputs=clinical_inputs,
+                model_prob=prob,
+                threshold=float(threshold),
+                symptomatic=bool(symptomatic),
+            )
+
+            st.markdown("---")
+            st.subheader("Final Decision")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("Clinical Category:", f"**{decision['clinical_category']}**")
+                st.write("Decision Source:", f"**{decision['decision_source']}**")
+            with c2:
+                st.write(
+                    "Model Risk Probability:", f"**{decision['model_probability']:.1%} ({decision['risk_band']})**"
+                )
+                st.write("Next Step:", decision["next_step"]) 
+
+            with st.expander("Inputs recap"):
+                st.dataframe(df, use_container_width=True)
+
         except Exception as e:  # noqa: BLE001
             st.error(f"Prediction failed: {e}")
 

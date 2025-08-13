@@ -5,7 +5,7 @@ End-to-end binary classification project for diabetes prediction using Streamlit
 ### Key Features
 - **Data exploration**: Browse shape, columns, head, and interactively filter ranges.
 - **Visualizations**: Plotly histograms, scatter plots with optional trendline, and a correlation heatmap.
-- **Model prediction**: Input clinical features and get probability + class with an intuitive UI.
+- **Model prediction (clinical-first)**: ADA rules applied first (FPG/OGTT/HbA1c/random+symptoms). If diagnostic criteria are met, classification is clinically overridden; otherwise the ML model acts as a risk stratifier with bands (Low/Moderate/High/Very High). Unified output shows Clinical Category, Decision Source, Model Risk Probability (+ band), and Next Step.
 - **Model performance**:
   - **Metrics**: ROC-AUC, Brier score, Accuracy, Precision, Recall, F1.
   - **Charts**: Confusion matrix heatmap, ROC curve, Precision–Recall curve.
@@ -60,7 +60,8 @@ pip install -r requirements.txt
 ### 2) Dataset
 - Ensure `data/dataset.csv` exists. The app expects columns:
   - `Pregnancies`, `Glucose`, `BloodPressure`, `SkinThickness`, `Insulin`, `BMI`, `DiabetesPedigreeFunction`, `Age`, `Outcome`
-  - Optional: `measurement_type` with values such as `fasting` or `post_meal` (defaulted to `fasting` if absent).
+  - Optional: `measurement_type` with values such as `fasting`, `post_meal`, `random`, `ogtt_2h` (defaulted to `fasting` if absent). For `ogtt_2h`, the `Glucose` value is interpreted as the 2-hour value.
+  - Optional (advanced): If you collect lab values separately, you may map them to the decision helper as `hba1c` and `ogtt_2h`.
 
 ## Training
 Training is performed via the notebook `notebooks/model_training.ipynb`:
@@ -92,21 +93,24 @@ Navigate to the pages via the left sidebar:
   - Confusion matrix heatmap.
   - ROC and Precision–Recall curves.
 
-## Optional Clinical Override Wrapper
-For settings where a fasting plasma glucose (FPG) threshold should deterministically drive classification (e.g., ≥126 mg/dL implies diabetes), you can wrap the trained pipeline:
+## Clinical-first Decision Logic (Unified Output)
+The app applies ADA-style clinical thresholds before the ML prediction:
+- Fasting Plasma Glucose (FPG): <100 Normal; 100–125 Prediabetes; ≥126 Diabetes (confirm if asymptomatic)
+- 2h OGTT: <140 Normal; 140–199 Prediabetes; ≥200 Diabetes
+- HbA1c: <5.7 Normal; 5.7–6.4 Prediabetes; ≥6.5 Diabetes (confirm if asymptomatic)
+- Random glucose ≥200 mg/dL + symptoms → Diabetes (single test sufficient)
 
-```python
-from rule_wrappers import ClinicalFPGRuleWrapper
+If any diagnostic rule is met, the app marks the case accordingly (Decision Source: "Clinical override" or "Rule + ML"). Otherwise, the ML model decides (Decision Source: "ML only"). The UI always shows:
+- **Clinical Category**: Normal, Prediabetes, or Diabetes
+- **Decision Source**: Clinical override, Rule + ML, or ML only
+- **Model Risk Probability**: Percentage plus risk band
+  - Bands: <20% Low; 20–50% Moderate; 50–80% High; ≥80% Very High
+- **Next Step** guidance
 
-wrapped_pipeline = ClinicalFPGRuleWrapper(
-    base_estimator=pipeline,         # your trained pipeline
-    glucose_feature_name="Glucose",
-    threshold_mg_dl=126.0,
-    override=True,
-)
-```
+The training notebook includes the same helper functions, ensuring consistent decisions in both environments.
 
-This will force positive predictions for samples at/above the threshold while preserving probabilistic outputs for others. Consider checking `measurement_type` to apply the override only for fasting inputs.
+## Optional Clinical Wrapper (legacy)
+`rule_wrappers.py` contains a simple glucose-threshold override wrapper. The primary app now ships with a built-in, more complete clinical-first decision layer; the wrapper remains for reference or specialized use.
 
 ## Deployment
 - **Streamlit Community Cloud**
