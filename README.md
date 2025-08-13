@@ -21,6 +21,22 @@ End-to-end binary classification project for diabetes prediction using Streamlit
 - `notebooks/model_training.ipynb`: EDA + training notebook that evaluates multiple models and saves `model.pkl` with metrics.
 - `rule_wrappers.py`: Optional clinical override wrapper (see below).
 
+## Folder Structure
+```text
+Diabetes/
+├─ app.py                      # Streamlit app entrypoint
+├─ data/
+│  └─ dataset.csv              # Input dataset (Pima Indians Diabetes)
+├─ model.pkl                   # Saved best pipeline + metrics (created by notebook)
+├─ notebooks/
+│  └─ model_training.ipynb     # EDA + training; writes model.pkl with metrics
+├─ README.md                   # Project documentation
+├─ requirements.txt            # Python dependencies
+├─ rule_wrappers.py            # Optional clinical rule wrapper for predictions
+├─ runtime.txt                 # Optional Python runtime pin for deployment
+└─ venv/                       # (Local) Virtual environment, not required in repo
+```
+
 ## Setup
 ### 1) Python and virtual environment
 - **Python**: 3.11 is recommended.
