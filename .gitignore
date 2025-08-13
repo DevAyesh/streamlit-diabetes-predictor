@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Caches/tests/coverage
+.pytest_cache/
+.mypy_cache/
+coverage/
+htmlcov/
+*.coverage
+.coverage
+
+# Builds/dist
+dist/
+build/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# Legacy artifacts (kept at root now)
+models/
+
